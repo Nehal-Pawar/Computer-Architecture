@@ -13,6 +13,8 @@ import examples.FloatMul;
 import examples.IntMul;
 import examples.MemUnit;
 import tools.InstructionSequence;
+import utilitytypes.EnumOpcode;
+import utilitytypes.IGlobals;
 import utilitytypes.IPipeReg;
 import utilitytypes.IPipeStage;
 import utilitytypes.IRegFile;
@@ -40,6 +42,10 @@ public class MyCpuCore extends CpuCore {
         for(int i=0;i<32;i++) {
         	GlobalData.rat[i]=i;
         }
+        for(int i=0;i<256;i++) {
+        	GlobalData.Table[i]="";
+        }
+       
         properties.setProperty("reg_file", regfile);
     }
     
@@ -50,8 +56,9 @@ public class MyCpuCore extends CpuCore {
     public void runProgram() {
         properties.setProperty("running", true);
         int i=0;
+        int j=0;
         while (properties.getPropertyBoolean("running")) {
-       // while(i<10) {
+        //  while(j<70) {
         	Logger.out.println("## Cycle number: " + cycle_number);
         	for(i=0;i<256;i++) {
         		if((!getGlobals().getRegisterFile().isInvalid(i))&&getGlobals().getRegisterFile().isUsed(i)&&getGlobals().getRegisterFile().isRenamed(i)) {
@@ -60,21 +67,22 @@ public class MyCpuCore extends CpuCore {
         		}
         	}            
             advanceClock();
-            //i++;
+            j++;
         }
     }
 
     @Override
     public void createPipelineRegisters() {
         createPipeReg("FetchToDecode");
-        createPipeReg("DecodeToExecute");
-        createPipeReg("DecodeToIntDiv");
-        createPipeReg("DecodeToFloatDiv");
-        createPipeReg("DecodeToMemory");
+        createPipeReg("DecodeToIQ");
+        createPipeReg("IQToExecute");
+        createPipeReg("IQToIntDiv");
+        createPipeReg("IQToFloatDiv");
+        createPipeReg("IQToMemory");
         //createPipeReg("DecodeToMemUnit");
-        createPipeReg("DecodeToIntMul");
-        createPipeReg("DecodeToFloatAddSub");//new
-        createPipeReg("DecodeToFloatMul");
+        createPipeReg("IQToIntMul");
+        createPipeReg("IQToFloatAddSub");//new
+        createPipeReg("IQToFloatMul");
         createPipeReg("IntDivToWriteback");//new
         createPipeReg("FloatDivToWriteback");//new
         createPipeReg("ExecuteToWriteback");
@@ -85,10 +93,11 @@ public class MyCpuCore extends CpuCore {
     public void createPipelineStages() {
         addPipeStage(new AllMyStages.Fetch(this));
         addPipeStage(new AllMyStages.Decode(this));
+        addPipeStage(new AllMyStages.IssueQueue(this));
         addPipeStage(new AllMyStages.Execute(this));
         addPipeStage(new IntDiv(this));
         addPipeStage(new FloatDiv(this));
-        //addPipeStage(new AllMyStages.Memory(this));
+        
         addPipeStage(new AllMyStages.Writeback(this));
     }
 
@@ -121,19 +130,20 @@ public class MyCpuCore extends CpuCore {
         // follow the convention of having a single input stage and single
         // output register can be connected simply my naming the functional
         // unit.  The input to MSFU is really called "MSFU.in".
-        connect("Decode", "DecodeToExecute", "Execute");//sequence
-        connect("Decode", "DecodeToIntDiv", "IntDiv");
+        connect("Decode", "DecodeToIQ", "IssueQueue");//sequence
+        connect("IssueQueue", "IQToExecute", "Execute");//sequence
+        connect("IssueQueue", "IQToIntDiv", "IntDiv");
         //connect("Decode", "DecodeToMemUnit", "MemUnit");
-        connect("Decode", "DecodeToMemory", "MemUnit");
-        connect("Decode", "DecodeToIntMul", "IntMul");
+        connect("IssueQueue", "IQToMemory", "MemUnit");
+        connect("IssueQueue", "IQToIntMul", "IntMul");
         
-        connect("Decode", "DecodeToFloatDiv", "FloatDiv");
+        connect("IssueQueue", "IQToFloatDiv", "FloatDiv");
              
        
         
-        connect("Decode", "DecodeToFloatAddSub", "FloatAddSub");//new
+        connect("IssueQueue", "IQToFloatAddSub", "FloatAddSub");//new
         
-        connect("Decode", "DecodeToFloatMul", "FloatMul");//new
+        connect("IssueQueue", "IQToFloatMul", "FloatMul");//new
         
         // Writeback has multiple input connections from different execute
         // units.  The output from MSFU is really called "MSFU.Delay.out",

@@ -14,6 +14,11 @@ import voidtypes.VoidLatch;
 import baseclasses.CpuCore;
 import baseclasses.Latch;
 import cpusimulator.CpuSimulator;
+import jdk.jfr.consumer.RecordingFile;
+
+import java.util.ArrayList;
+import java.util.EnumSet;
+import java.util.List;
 import static utilitytypes.EnumOpcode.*;
 import utilitytypes.ICpuCore;
 import utilitytypes.IGlobals;
@@ -95,7 +100,7 @@ public class AllMyStages {
             // CpuSimulator.printStagesEveryCycle is set to true.
             if (ins.isNull()) {
                 // Fetch is working on no instruction at no address
-                setActivity("----: NULL");
+                setActivity("");
             } else {            
                 // Since there is no input pipeline register, we have to inform
                 // the diagnostic helper code explicitly what instruction Fetch
@@ -141,7 +146,7 @@ public class AllMyStages {
         // sent in by Fetch, because it is the fall-through that we don't
         // want to execute.  This flag is set only for status reporting purposes.
         boolean squashing_instruction = false;
-        
+        boolean shutting_down = false;
 
         @Override
         public String getStatus() {
@@ -158,12 +163,16 @@ public class AllMyStages {
 //            "MemoryToWriteback"};
         
         @Override
-        public void compute() {
-            // Since this stage has multiple outputs, must read input(s) 
-            // explicitly
-            Latch input = this.readInput(0).duplicate();
+        public void compute(Latch input, Latch output) {
+            if (shutting_down) {
+                addStatusWord("Shutting down");
+                setActivity("");
+                return;
+            }
+            
+            input = input.duplicate();
             InstructionBase ins = input.getInstruction();
-
+           
             // Default to no squashing.
             squashing_instruction = false;
             
@@ -177,8 +186,9 @@ public class AllMyStages {
                 //setActivity("----: NULL");
 //                globals.setClockedProperty("branch_state_decode", GlobalData.BRANCH_STATE_NULL);
                 
-                // Squashing the fall-through instruction is "consuming" it, so we
-                // mustn't forget to consume it.
+                // Since we don't pass an instruction to the next stage,
+                // must explicitly call input.consume in the case that
+                // the next stage is busy.
                 input.consume();
                 return;
             }
@@ -252,10 +262,10 @@ public class AllMyStages {
             // We do this here for CALL, which can't be allowed to do anything
             // unless it can pass along its work to Writeback, and we pass
             // the call return address through Execute.
-            int d2e_output_num = lookupOutput("DecodeToExecute");
-            Latch d2e_output = this.newOutput(d2e_output_num);
+            //int d2e_output_num = lookupOutput("DecodeToIQ");
+            //Latch d2e_output = this.newOutput(d2e_output_num);
             
-            
+            oper0 = ins.getOper0();
             switch (opcode) {
                 case BRA:
                     if (!oper0.hasValue()) {
@@ -328,8 +338,9 @@ public class AllMyStages {
 //                        Logger.out.println("Resolving branch not taken");
                     }
                     
-                    // Having completed execution of the BRA instruction, we must
-                    // explicitly indicate that it has been consumed.
+                    // Since we don't pass an instruction to the next stage,
+                    // must explicitly call input.consume in the case that
+                    // the next stage is busy.
                     input.consume();
                     // All done; return.
                     return;
@@ -384,7 +395,7 @@ public class AllMyStages {
                     // Before we can resolve the branch, we have to make sure
                     // that the return address can be passed to Writeback
                     // through Execute.
-                    if (!d2e_output.canAcceptWork()) return;
+                    if (!output.canAcceptWork()) return;
                     
                     // To get the return address into Writeback, we will
                     // replace the instruction's source operands with the
@@ -395,15 +406,18 @@ public class AllMyStages {
                     ins.setSrc1(pc_operand);
                     ins.setSrc2(Operand.newLiteralSource(1));
                     ins.setLabelTarget(VoidLabelTarget.getVoidLabelTarget());
-                    d2e_output.setInstruction(ins);
+                    output.setInstruction(ins);
                     regfile.markInvalid(oper0.getRegisterNumber());
                     
                     globals.setClockedProperty("program_counter_takenbranch", value1);
                     globals.setClockedProperty("branch_state_decode", GlobalData.BRANCH_STATE_TAKEN);
                     globals.setClockedProperty("decode_squash", true);
                     
-                    d2e_output.write();
+                    output.write();
                     input.consume();
+                    output.setInstruction(ins);
+                    // Send the latch data to the next stage
+                    //output.write();
                     return;
                     
                     // Having completed execution of the JMP instruction, we must
@@ -415,99 +429,14 @@ public class AllMyStages {
             
             // Allocate an output latch for the output pipeline register
             // appropriate for the type of instruction being processed.
-            Latch output;
-            int output_num;
-            if (opcode == EnumOpcode.DIV) {
-                output_num = lookupOutput("DecodeToIntDiv");
-                output = this.newOutput(output_num);
-            } else
-        	if (opcode == EnumOpcode.FDIV) {
-                output_num = lookupOutput("DecodeToFloatDiv");
-                output = this.newOutput(output_num);
-            } else
-            if (opcode == EnumOpcode.MUL) {
-                output_num = lookupOutput("DecodeToIntMul");
-                output = this.newOutput(output_num);
-            } else
-        	if (opcode == EnumOpcode.FMUL) {
-             output_num = lookupOutput("DecodeToFloatMul");
-                output = this.newOutput(output_num);
-            } else
-        	if (opcode == EnumOpcode.FCMP||opcode==EnumOpcode.FSUB||opcode==EnumOpcode.FADD) {
-                output_num = lookupOutput("DecodeToFloatAddSub");
-                output = this.newOutput(output_num);
-            } else
-        	/*if (opcode == EnumOpcode.STORE||opcode==EnumOpcode.LOAD) {
-                output_num = lookupOutput("DecodeToMemUnit");
-                output = this.newOutput(output_num);
-            } else*/
-            if (opcode.accessesMemory()) {
-            	
-                output_num = lookupOutput("DecodeToMemory");
-                output = this.newOutput(output_num);
-            } else {
-                output_num = lookupOutput("DecodeToExecute");
-                output = this.newOutput(output_num);
-            }
             
             // If the desired output is stalled, then just bail out.
             // No inputs have been claimed, so this will result in a
             // automatic pipeline stall.
-            if (!output.canAcceptWork()) return;
             
             
-          
-            int[] srcRegs = new int[3];
-            // Only want to forward to oper0 if it's a source.
-            srcRegs[0] = opcode.oper0IsSource() ? oper0.getRegisterNumber() : -1;
-            srcRegs[1] = src1.getRegisterNumber();
-            srcRegs[2] = src2.getRegisterNumber();
-            Operand[] operArray = {oper0, src1, src2};
+            if (ins.getOpcode() == EnumOpcode.HALT) shutting_down = true;         
             
-            // Loop over source operands, looking to see if any can be
-            // forwarded to the next stage.
-            for (int sn=0; sn<3; sn++) {
-                int srcRegNum = srcRegs[sn];
-                // Skip any operands that are not register sources
-                if (srcRegNum < 0) continue;
-                // Skip any that already have values
-                if (operArray[sn].hasValue()) continue;
-                
-                String propname = "forward" + sn;
-                if (!input.hasProperty(propname)) {
-                    // If any source operand is not available
-                    // now or on the next cycle, then stall.
-                    //Logger.out.println("Stall because no " + propname);
-                    this.setResourceWait(operArray[sn].getRegisterName());
-                    // Nothing else to do.  Bail out.
-                    return;
-                }
-            }
-            
-            
-            if (CpuSimulator.printForwarding) {
-                for (int sn=0; sn<3; sn++) {
-                    String propname = "forward" + sn;
-                    if (input.hasProperty(propname)) {
-                        String operName = PipelineStageBase.operNames[sn];
-                        String srcFoundIn = input.getPropertyString(propname);
-                        String srcRegName = operArray[sn].getRegisterName();
-                        Logger.out.printf("# Posting forward %s from %s to %s next stage\n", 
-                                srcRegName,
-                                srcFoundIn, operName);
-                    }
-                }
-            }            
-                    
-            // If we managed to find all source operands, mark the destination
-            // register invalid then finish putting data into the output latch 
-            // and send it.
-            
-            // Mark the destination register invalid
-            if (opcode.needsWriteback()) {
-                int oper0reg = oper0.getRegisterNumber();
-                //regfile.markInvalid(oper0reg);
-            }     
             if(!opcode.oper0IsSource())
             if(ins.getOper0().isRegister()) {//-----------------new 
             	for(i=0;i<256;i++) {            	
@@ -563,52 +492,149 @@ public class AllMyStages {
     
 
     /*** Memory Stage ***/
-    static class Memory extends PipelineStageBase {
-        public Memory(ICpuCore core) {
-            super(core, "Memory");
+    static class IssueQueue extends PipelineStageBase {
+        public IssueQueue(ICpuCore core) {
+            super(core, "IssueQueue");
         }
 
         @Override
-        public void compute(Latch input, Latch output) {
-            if (input.isNull()) return;
-            doPostedForwarding(input);
+        public void compute() {
+        	 Latch input = this.readInput(0).duplicate();
+        	 IGlobals globals = (GlobalData)getCore().getGlobals();
+        	 //IRegFile regfile = globals.getRegisterFile();
+            //if (input.isNull()) return;
+            
+           
+            input = input.duplicate();
             InstructionBase ins = input.getInstruction();
-            setActivity(ins.toString());
-
-            Operand oper0 = ins.getOper0();
-            int oper0val = ins.getOper0().getValue();
-            int source1 = ins.getSrc1().getValue();
-            int source2 = ins.getSrc2().getValue();
-            
-            // The Memory stage no longer follows Execute.  It is an independent
-            // functional unit parallel to Execute.  Therefore we must perform
-            // address calculation here.
-            int addr = source1 + source2;
-            
-            int value = 0;
-            IGlobals globals = (GlobalData)getCore().getGlobals();
-            int[] memory = globals.getPropertyIntArray(MAIN_MEMORY);
-
-            switch (ins.getOpcode()) {
-                case LOAD:
-                    // Fetch the value from main memory at the address
-                    // retrieved above.
-                    value = memory[addr];
-                    output.setResultValue(value);
-                    output.setInstruction(ins);
-                    addStatusWord("Mem[" + addr + "]");
-                    break;
-                
-                case STORE:
-                    // For store, the value to be stored in main memory is
-                    // in oper0, which was fetched in Decode.
-                    memory[addr] = oper0val;
-                    addStatusWord("Mem[" + addr + "]=" + ins.getOper0().getValueAsString());
-                    return;
-                    
-                default:
-                    throw new RuntimeException("Non-memory instruction got into Memory stage");
+            ins=ins.duplicate();
+            //setActivity(ins.toString());
+            for(int i=0;i<256;i++) {
+            	if(GlobalData.Table[i]=="") {            		
+            		GlobalData.Table[i]=ins.toString();
+            		GlobalData.InputTable[i]=input;
+            		input.consume();
+            		break;
+            	}
             }
+           
+            //GlobalData.Table[i].setOpcode(EnumOpcode.NULL);
+           for(int i=0;i<256;i++) {
+        	   if(GlobalData.Table[i]!="") {
+        		   
+            ins=GlobalData.InputTable[i].getInstruction();
+            input=GlobalData.InputTable[i];
+            forwardingSearch(input);
+            EnumOpcode opcode = ins.getOpcode();
+            Latch output;
+            int output_num;
+            if (opcode == EnumOpcode.DIV) {
+                output_num = lookupOutput("IQToIntDiv");
+                output = this.newOutput(output_num);
+            } else
+        	if (opcode == EnumOpcode.FDIV) {
+                output_num = lookupOutput("IQToFloatDiv");
+                output = this.newOutput(output_num);
+            } else
+            if (opcode == EnumOpcode.MUL) {
+                output_num = lookupOutput("IQToIntMul");
+                output = this.newOutput(output_num);
+            } else
+        	if (opcode == EnumOpcode.FMUL) {
+             output_num = lookupOutput("IQToFloatMul");
+                output = this.newOutput(output_num);
+            } else
+        	if (opcode == EnumOpcode.FCMP||opcode==EnumOpcode.FSUB||opcode==EnumOpcode.FADD) {
+                output_num = lookupOutput("IQToFloatAddSub");
+                output = this.newOutput(output_num);
+            } else
+        	/*if (opcode == EnumOpcode.STORE||opcode==EnumOpcode.LOAD) {
+                output_num = lookupOutput("DecodeToMemUnit");
+                output = this.newOutput(output_num);
+            } else*/
+            if (opcode.accessesMemory()) {            	
+                output_num = lookupOutput("IQToMemory");
+                output = this.newOutput(output_num);
+            } else {
+                output_num = lookupOutput("IQToExecute");
+                output = this.newOutput(output_num);
+            }
+            if (!output.canAcceptWork()) return;
+            
+            
+            int[] srcRegs = new int[3];
+            Operand oper0 = ins.getOper0();
+            Operand src1  = ins.getSrc1();
+            Operand src2  = ins.getSrc2();
+            // Only want to forward to oper0 if it's a source.
+            srcRegs[0] = opcode.oper0IsSource() ? oper0.getRegisterNumber() : -1;
+            srcRegs[1] = src1.getRegisterNumber();
+            srcRegs[2] = src2.getRegisterNumber();
+            Operand[] operArray = {oper0, src1, src2};
+            
+            // Loop over source operands, looking to see if any can be
+            // forwarded to the next stage.
+            boolean b=false;
+            for (int sn=0; sn<3; sn++) {
+                int srcRegNum = srcRegs[sn];
+                // Skip any operands that are not register sources
+                if (srcRegNum < 0) continue;
+                // Skip any that already have values
+                if (operArray[sn].hasValue()) continue;
+                
+                String propname = "forward" + sn;
+                if (!input.hasProperty(propname)) {
+                    // If any source operand is not available
+                    // now or on the next cycle, then stall.
+                    //Logger.out.println("Stall because no " + propname);
+                    //this.setResourceWait(operArray[sn].getRegisterName());
+                    // Nothing else to do.  Bail out.
+                	b=true;
+                	break;
+                    //return;
+                }
+            }
+        	   
+            if(b)continue;
+            
+            if (CpuSimulator.printForwarding) {
+                for (int sn=0; sn<3; sn++) {
+                    String propname = "forward" + sn;
+                    if (input.hasProperty(propname)) {
+                        String operName = PipelineStageBase.operNames[sn];
+                        String srcFoundIn = input.getPropertyString(propname);
+                        String srcRegName = operArray[sn].getRegisterName();
+                        Logger.out.printf("# Posting forward %s from %s to %s next stage\n", 
+                                srcRegName,
+                                srcFoundIn, operName);
+                    }
+                }
+            }            
+                    
+            // If we managed to find all source operands, mark the destination
+            // register invalid then finish putting data into the output latch 
+            // and send it.
+            
+            // Mark the destination register invalid
+            
+            // Copy the forward# properties
+            output.copyAllPropertiesFrom(input);
+            // Copy the instruction
+            output.setInstruction(ins);
+            // Send the latch data to the next stage
+            output.write();
+            GlobalData.Table[i]="";
+            // And don't forget to indicate that the input was consumed!
+            //input.consume();
+        	   }
+        	   }
+           String ConcatActivity="";
+           for(int i=0;i<256;i++) {
+           	if(GlobalData.Table[i]!="") {
+           		ConcatActivity=ConcatActivity+GlobalData.Table[i].toString()+"\n";
+           	}
+           }
+           setActivity(ConcatActivity);	
         }
     }
     
@@ -619,12 +645,24 @@ public class AllMyStages {
             super(core, "Writeback");
         }
 
+        boolean shutting_down = false;
+
         @Override
         public void compute() {
+            List<String> doing = new ArrayList<String>();
         	
-            IGlobals globals = (GlobalData)getCore().getGlobals();
+            ICpuCore core = getCore();
+            IGlobals globals = (GlobalData)core.getGlobals();
             // Get register file and valid flags from globals
             IRegFile regfile = globals.getRegisterFile();
+            
+            if (shutting_down) {
+                Logger.out.println("disp=" + core.numDispatched() + " compl=" + core.numCompleted());
+                setActivity("Shutting down");
+            }
+            if (shutting_down && core.numCompleted() >= core.numDispatched()) {
+                globals.setProperty("running", false);
+            }
             
             // Writeback has multiple inputs, so we just loop over them
             int num_inputs = this.getInputRegisters().size();
@@ -636,6 +674,8 @@ public class AllMyStages {
                 if (input.isNull()) continue;
                 
                 InstructionBase ins = input.getInstruction();
+                if (ins.isValid()) core.incCompleted();
+                doing.add(ins.toString());
                 
                 if (ins.getOpcode().needsWriteback()) {
                     // By definition, oper0 is a register and the destination.
@@ -650,14 +690,16 @@ public class AllMyStages {
                     regfile.setValue(regnum, value, isfloat);
                 }
 
-                if (input.getInstruction().getOpcode() == EnumOpcode.HALT) {
-                    globals.setProperty("running", false);
+                if (ins.getOpcode() == EnumOpcode.HALT) {
+                    shutting_down = true;
                 }
                 
                 // There are no outputs that could stall, so just consume
                 // all valid inputs.
                 input.consume();
             }
+            
+            setActivity(String.join("\n", doing));
         }
     }
 }

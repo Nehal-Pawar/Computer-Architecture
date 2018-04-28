@@ -126,7 +126,7 @@ public class MemUnit extends FunctionalUnitBase {
                     memory[addr] = oper0val;
                     addStatusWord("Mem[" + addr + "]=" + ins.getOper0().getValueAsString());
                     //output.setInstruction(ins);
-                    return;
+                    break;
                     
                 default:
                     throw new RuntimeException("Non-memory instruction got into Memory stage");

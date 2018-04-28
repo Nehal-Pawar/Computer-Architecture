@@ -6,9 +6,12 @@
 package implementation;
 
 import baseclasses.InstructionBase;
+import baseclasses.Latch;
 import baseclasses.PropertiesContainer;
 import java.util.Map;
 import java.util.Set;
+
+import utilitytypes.EnumOpcode;
 import utilitytypes.IGlobals;
 import tools.InstructionSequence;
 import utilitytypes.IProperties;
@@ -38,7 +41,9 @@ public class GlobalData extends PropertiesContainer implements IGlobals {
     public static int Counter16Cycle =1;
     //public static int Addr =0;
     public static int rat[]=new int [32];
-
+    //public static InstructionBase Table[]=new InstructionBase[256];
+    public static String Table[]=new String[256];
+    public static Latch InputTable[]=new Latch[256];
     @Override
     public void setup() {
         this.setProperty(PROGRAM_COUNTER, (int)0);
@@ -49,8 +54,12 @@ public class GlobalData extends PropertiesContainer implements IGlobals {
         this.setProperty("branch_state_decode", BRANCH_STATE_NULL);
         
         IRegFile regfile = new RegisterFile(256);
-        
-        
+        //for( int i=0; i<256; i++ )
+        	//Table[i] = new InstructionBase();
+        //EnumOpcode opcode = EnumOpcode.NULL;
+       /* for(int i=0;i<256;i++) {
+        	Table[i].setOpcode(EnumOpcode.NULL);
+        }*/
      
 	this.setProperty("reg_file", regfile);
     }

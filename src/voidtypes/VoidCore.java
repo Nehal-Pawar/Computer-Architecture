@@ -76,4 +76,22 @@ public class VoidCore extends VoidModule implements ICpuCore {
     @Override
     public List<IPipeStage> getStagePrintOrder() { return stagelist; }
     
+    @Override
+    public void incIssued() {}
+
+    @Override
+    public void incCompleted() {}
+
+    @Override
+    public void incDispatched() {}
+
+    @Override
+    public int numIssued() { return 0; }
+
+    @Override
+    public int numCompleted() { return 0; }
+
+    @Override
+    public int numDispatched() { return 0; }
+    
 }
